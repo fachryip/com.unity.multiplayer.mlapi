@@ -1625,7 +1625,23 @@ namespace MLAPI
                     }
                 }
 
-                OnClientConnectedCallback?.Invoke(ownerClientId);
+                // NSS-Experimental: One way to assure we don't fail if a user doesn't remove the OnClientConnectedCallback reference
+                if (OnClientConnectedCallback != null)
+                {
+                    var invocationList = OnClientConnectedCallback.GetInvocationList();
+                    foreach (var invoker in invocationList)
+                    {
+                        var invokerBehaviour = invoker.Target as NetworkBehaviour;
+                        if (invokerBehaviour != null && invokerBehaviour.isActiveAndEnabled)
+                        {
+                            if (invokerBehaviour.NetworkObject != null && invokerBehaviour.NetworkObject.IsSpawned)
+                            {
+                                invoker.Method.Invoke(invoker.Target, new object[] { ownerClientId });
+                            }
+                        }
+                    }
+                }
+                //OnClientConnectedCallback?.Invoke(ownerClientId);
 
                 if (!createPlayerObject || (playerPrefabHash == null && NetworkConfig.PlayerPrefab == null))
                 {

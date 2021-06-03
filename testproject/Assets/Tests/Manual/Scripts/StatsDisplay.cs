@@ -41,6 +41,12 @@ namespace TestProject.ManualTests
             }
         }
 
+
+        private void OnDestroy()
+        {
+            //NetworkManager.OnClientConnectedCallback -= OnClientConnectedCallback;
+        }
+
         public override void NetworkStart()
         {
             if (NetworkManager.IsServer)
