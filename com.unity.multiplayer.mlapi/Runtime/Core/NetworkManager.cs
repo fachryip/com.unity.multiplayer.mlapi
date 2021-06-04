@@ -183,7 +183,40 @@ namespace MLAPI
         /// </summary>
         public event Action<ulong> OnClientConnectedCallback = null;
 
-        internal void InvokeOnClientConnectedCallback(ulong clientId) => OnClientConnectedCallback?.Invoke(clientId);
+        /// <summary>
+        /// Wrapper method to invoke the OnClientConnectedCallback which also assures that all registered delegates belong to a NetworkBehaviour
+        /// and that the associated NetworkObject is not destroyed and is actually still considered "spawned" to avoid throwing an exception and
+        /// stopping execution at the current call stack position. (i.e. HandleApproval can skip notifying other players that a player has joined)
+        /// </summary>
+        /// <param name="clientId"></param>
+        internal void InvokeOnClientConnectedCallback(ulong clientId)
+        {
+            if (OnClientConnectedCallback != null)
+            {
+                var invocationList = OnClientConnectedCallback.GetInvocationList();
+                foreach (var invoker in invocationList)
+                {
+                    var invokerBehaviour = invoker.Target as NetworkBehaviour;
+                    if (invokerBehaviour != null)
+                    {
+                        if (invokerBehaviour.NetworkObject != null && invokerBehaviour.NetworkObject.IsSpawned)
+                        {
+                            invoker.Method.Invoke(invoker.Target, new object[] { clientId });
+                        }
+                        else // This is a very unlikely scenario but here just in case
+                        {
+                            UnityEngine.Debug.LogWarning($"{nameof(OnClientConnectedCallback)} still contains a registered {nameof(NetworkBehaviour)} " +
+                                $"({invokerBehaviour.name}) that is associated with an already destroyed or no longer spawned.  Please make sure to remove the registration to this event within the OnDestroy method of {invokerBehaviour.name}.");
+                        }
+                    }
+                    else // This is the most common scenario where a user forgets to remove their callback from the OnClientConnectedCallback event/Action
+                    {
+                        UnityEngine.Debug.LogWarning($"{nameof(OnClientConnectedCallback)} contains delegates that have no target (i.e. they are destroyed)!  " +
+                            $"Please check all classes registering for the {nameof(OnClientConnectedCallback)} event to make sure you are removing your delegate callbacks from the event as well.");
+                    }
+                }
+            }
+        }
 
         /// <summary>
         /// The callback to invoke when a client disconnects. This callback is only ran on the server and on the local client that disconnects.
@@ -1625,23 +1658,9 @@ namespace MLAPI
                     }
                 }
 
-                // NSS-Experimental: One way to assure we don't fail if a user doesn't remove the OnClientConnectedCallback reference
-                if (OnClientConnectedCallback != null)
-                {
-                    var invocationList = OnClientConnectedCallback.GetInvocationList();
-                    foreach (var invoker in invocationList)
-                    {
-                        var invokerBehaviour = invoker.Target as NetworkBehaviour;
-                        if (invokerBehaviour != null && invokerBehaviour.isActiveAndEnabled)
-                        {
-                            if (invokerBehaviour.NetworkObject != null && invokerBehaviour.NetworkObject.IsSpawned)
-                            {
-                                invoker.Method.Invoke(invoker.Target, new object[] { ownerClientId });
-                            }
-                        }
-                    }
-                }
-                //OnClientConnectedCallback?.Invoke(ownerClientId);
+
+                InvokeOnClientConnectedCallback(ownerClientId);
+
 
                 if (!createPlayerObject || (playerPrefabHash == null && NetworkConfig.PlayerPrefab == null))
                 {
