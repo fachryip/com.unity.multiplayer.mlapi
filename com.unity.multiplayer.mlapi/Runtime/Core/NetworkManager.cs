@@ -1149,6 +1149,16 @@ namespace MLAPI
         }
 
         private readonly NetworkBuffer m_InputBufferWrapper = new NetworkBuffer(new byte[0]);
+        private bool m_InputBufferWrapperUsed;
+
+        // The fallback wrapper is used in case we have to handle incoming data but the InputStreamWrapper is already being used.
+        // This change is needed because MLAPI calls HandleIncomingData nested when it is applying buffered messages to an object spawned in HandleIncomingData.
+        // This fallback wrapper solution works because HandleIncomingData will never get nested more then once because:
+        // - Messages we buffer and execute in nest level 1 can never end up in another HandleIncomingData call. This is true because HandleIncomingData is only called in two cases:
+        //    1. When a new message arrives (nest level 0)
+        //    2. When that new message spawns an object and applies buffered messages (nest level 1)
+        //Nest level 1 can never trigger case 1. or 2. again because case 1. can only be triggered by the server sending a spawn packet down and not locally and case 2. can only be triggered by case 1..
+        private readonly NetworkBuffer m_FallbackInputBufferWrapper = new NetworkBuffer(new byte[0]);
         private readonly RpcBatcher m_RpcBatcher = new RpcBatcher();
 
         internal void HandleIncomingData(ulong clientId, NetworkChannel networkChannel, ArraySegment<byte> data, float receiveTime, bool allowBuffer)
@@ -1161,13 +1171,24 @@ namespace MLAPI
                 NetworkLog.LogInfo("Unwrapping Data Header");
             }
 
-            m_InputBufferWrapper.SetTarget(data.Array);
-            m_InputBufferWrapper.SetLength(data.Count + data.Offset);
-            m_InputBufferWrapper.Position = data.Offset;
-
-            using (var messageStream = MessagePacker.UnwrapMessage(m_InputBufferWrapper, out byte messageType))
+            NetworkBuffer inputBufferWrapper;
+            if (m_InputBufferWrapperUsed)
             {
-                if (messageStream == null)
+                inputBufferWrapper = m_FallbackInputBufferWrapper;
+            }
+            else
+            {
+                inputBufferWrapper = m_InputBufferWrapper;
+                m_InputBufferWrapperUsed = true;
+            }
+
+            inputBufferWrapper.SetTarget(data.Array);
+            inputBufferWrapper.SetLength(data.Count + data.Offset);
+            inputBufferWrapper.Position = data.Offset;
+
+            using (var messageBuffer = MessagePacker.UnwrapMessage(inputBufferWrapper, out byte messageType))
+            {
+                if (messageBuffer == null)
                 {
                     if (NetworkLog.CurrentLogLevel <= LogLevel.Error)
                     {
@@ -1212,73 +1233,73 @@ namespace MLAPI
                 switch (messageType)
                 {
                     case NetworkConstants.SNAPSHOT_DATA:
-                        InternalMessageHandler.HandleSnapshot(clientId, messageStream);
+                        InternalMessageHandler.HandleSnapshot(clientId, messageBuffer);
                         break;
                     case NetworkConstants.CONNECTION_REQUEST:
                         if (IsServer)
                         {
-                            MessageHandler.HandleConnectionRequest(clientId, messageStream);
+                            MessageHandler.HandleConnectionRequest(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.CONNECTION_APPROVED:
                         if (IsClient)
                         {
-                            MessageHandler.HandleConnectionApproved(clientId, messageStream, receiveTime);
+                            MessageHandler.HandleConnectionApproved(clientId, messageBuffer, receiveTime);
                         }
 
                         break;
                     case NetworkConstants.ADD_OBJECT:
                         if (IsClient)
                         {
-                            MessageHandler.HandleAddObject(clientId, messageStream);
+                            MessageHandler.HandleAddObject(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.DESTROY_OBJECT:
                         if (IsClient)
                         {
-                            MessageHandler.HandleDestroyObject(clientId, messageStream);
+                            MessageHandler.HandleDestroyObject(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.SWITCH_SCENE:
                         if (IsClient)
                         {
-                            MessageHandler.HandleSwitchScene(clientId, messageStream);
+                            MessageHandler.HandleSwitchScene(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.CHANGE_OWNER:
                         if (IsClient)
                         {
-                            MessageHandler.HandleChangeOwner(clientId, messageStream);
+                            MessageHandler.HandleChangeOwner(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.ADD_OBJECTS:
                         if (IsClient)
                         {
-                            MessageHandler.HandleAddObjects(clientId, messageStream);
+                            MessageHandler.HandleAddObjects(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.DESTROY_OBJECTS:
                         if (IsClient)
                         {
-                            MessageHandler.HandleDestroyObjects(clientId, messageStream);
+                            MessageHandler.HandleDestroyObjects(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.TIME_SYNC:
                         if (IsClient)
                         {
-                            MessageHandler.HandleTimeSync(clientId, messageStream, receiveTime);
+                            MessageHandler.HandleTimeSync(clientId, messageBuffer, receiveTime);
                         }
 
                         break;
                     case NetworkConstants.NETWORK_VARIABLE_DELTA:
-                        MessageHandler.HandleNetworkVariableDelta(clientId, messageStream, BufferCallback, new PreBufferPreset()
+                        MessageHandler.HandleNetworkVariableDelta(clientId, messageBuffer, BufferCallback, new PreBufferPreset()
                         {
                             AllowBuffer = allowBuffer,
                             NetworkChannel = networkChannel,
@@ -1289,15 +1310,15 @@ namespace MLAPI
                         });
                         break;
                     case NetworkConstants.UNNAMED_MESSAGE:
-                        MessageHandler.HandleUnnamedMessage(clientId, messageStream);
+                        MessageHandler.HandleUnnamedMessage(clientId, messageBuffer);
                         break;
                     case NetworkConstants.NAMED_MESSAGE:
-                        MessageHandler.HandleNamedMessage(clientId, messageStream);
+                        MessageHandler.HandleNamedMessage(clientId, messageBuffer);
                         break;
                     case NetworkConstants.CLIENT_SWITCH_SCENE_COMPLETED:
                         if (IsServer && NetworkConfig.EnableSceneManagement)
                         {
-                            MessageHandler.HandleClientSwitchSceneCompleted(clientId, messageStream);
+                            MessageHandler.HandleClientSwitchSceneCompleted(clientId, messageBuffer);
                         }
                         else if (!NetworkConfig.EnableSceneManagement)
                         {
@@ -1308,14 +1329,14 @@ namespace MLAPI
                     case NetworkConstants.ALL_CLIENTS_LOADED_SCENE:
                         if (IsClient)
                         {
-                            MessageHandler.HandleAllClientsSwitchSceneCompleted(clientId, messageStream);
+                            MessageHandler.HandleAllClientsSwitchSceneCompleted(clientId, messageBuffer);
                         }
 
                         break;
                     case NetworkConstants.SERVER_LOG:
                         if (IsServer && NetworkConfig.EnableNetworkLogs)
                         {
-                            MessageHandler.HandleNetworkLog(clientId, messageStream);
+                            MessageHandler.HandleNetworkLog(clientId, messageBuffer);
                         }
 
                         break;
@@ -1325,13 +1346,13 @@ namespace MLAPI
                             {
                                 if (RpcQueueContainer.IsUsingBatching())
                                 {
-                                    m_RpcBatcher.ReceiveItems(messageStream, ReceiveCallback, RpcQueueContainer.QueueItemType.ServerRpc, clientId, receiveTime);
+                                    m_RpcBatcher.ReceiveItems(messageBuffer, ReceiveCallback, RpcQueueContainer.QueueItemType.ServerRpc, clientId, receiveTime);
                                     ProfilerStatManager.RpcBatchesRcvd.Record();
                                     PerformanceDataManager.Increment(ProfilerConstants.RpcBatchesReceived);
                                 }
                                 else
                                 {
-                                    MessageHandler.RpcReceiveQueueItem(clientId, messageStream, receiveTime, RpcQueueContainer.QueueItemType.ServerRpc);
+                                    MessageHandler.RpcReceiveQueueItem(clientId, messageBuffer, receiveTime, RpcQueueContainer.QueueItemType.ServerRpc);
                                 }
                             }
 
@@ -1343,13 +1364,13 @@ namespace MLAPI
                             {
                                 if (RpcQueueContainer.IsUsingBatching())
                                 {
-                                    m_RpcBatcher.ReceiveItems(messageStream, ReceiveCallback, RpcQueueContainer.QueueItemType.ClientRpc, clientId, receiveTime);
+                                    m_RpcBatcher.ReceiveItems(messageBuffer, ReceiveCallback, RpcQueueContainer.QueueItemType.ClientRpc, clientId, receiveTime);
                                     ProfilerStatManager.RpcBatchesRcvd.Record();
                                     PerformanceDataManager.Increment(ProfilerConstants.RpcBatchesReceived);
                                 }
                                 else
                                 {
-                                    MessageHandler.RpcReceiveQueueItem(clientId, messageStream, receiveTime, RpcQueueContainer.QueueItemType.ClientRpc);
+                                    MessageHandler.RpcReceiveQueueItem(clientId, messageBuffer, receiveTime, RpcQueueContainer.QueueItemType.ClientRpc);
                                 }
                             }
 
@@ -1359,7 +1380,7 @@ namespace MLAPI
                         {
                             if (IsClient)
                             {
-                                using (var reader = PooledNetworkReader.Get(messageStream))
+                                using (var reader = PooledNetworkReader.Get(messageBuffer))
                                 {
                                     var networkObjectId = reader.ReadUInt64Packed();
                                     var (isReparented, latestParent) = NetworkObject.ReadNetworkParenting(reader);
@@ -1391,6 +1412,12 @@ namespace MLAPI
                 NetworkProfiler.EndEvent();
 #endif
             }
+
+            if (inputBufferWrapper == m_InputBufferWrapper)
+            {
+                m_InputBufferWrapperUsed = false;
+            }
+
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             s_HandleIncomingData.End();
 #endif
