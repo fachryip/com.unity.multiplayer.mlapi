@@ -378,7 +378,8 @@ namespace Unity.Netcode
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetWriteSize(string s, bool oneByteChars = false)
         {
-            return sizeof(int) + s.Length * (oneByteChars ? sizeof(byte) : sizeof(char));
+            var length = string.IsNullOrEmpty(s) ? 0 : s.Length;
+            return sizeof(int) + length * (oneByteChars ? sizeof(byte) : sizeof(char));
         }
 
         /// <summary>
